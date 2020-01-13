@@ -138,6 +138,151 @@ describe('db, session tokens do not expire:', () => {
   });
 });
 
+describe('db with redis disabled:', () => {
+  const tokenLifetimes = {
+    sessionTokenWithoutDevice: 2419200000,
+  };
+
+  let results, pool, log, tokens, db;
+
+  beforeEach(() => {
+    results = {};
+    pool = {
+      get: sinon.spy(() => P.resolve(results.pool)),
+      post: sinon.spy(() => P.resolve()),
+      del: sinon.spy(() => P.resolve()),
+      put: sinon.spy(() => P.resolve()),
+    };
+    log = mocks.mockLog();
+    tokens = require(`${LIB_DIR}/tokens`)(log, { tokenLifetimes });
+    const DB = proxyquire(`${LIB_DIR}/db`, {
+      './pool': function() {
+        return pool;
+      },
+      './redis': () => {},
+    })({ redis: {}, tokenLifetimes, tokenPruning: {} }, log, tokens, {});
+    return DB.connect({}).then(result => (db = result));
+  });
+
+  it('db.sessions succeeds without a redis instance', () => {
+    results.pool = [];
+    return db.sessions('fakeUid').then(result => {
+      assert.equal(pool.get.callCount, 1);
+      const args = pool.get.args[0];
+      assert.equal(args.length, 2);
+      assert.equal(typeof args[0].render, 'function');
+      assert.equal(args[0].constructor.name, 'SafeUrl');
+      assert.deepEqual(args[1], { uid: 'fakeUid' });
+      assert.deepEqual(result, []);
+    });
+  });
+
+  it('db.devices succeeds without a redis instance', () => {
+    results.pool = [];
+    return db.devices('fakeUid').then(result => {
+      assert.equal(pool.get.callCount, 1);
+      const args = pool.get.args[0];
+      assert.equal(args.length, 2);
+      assert.equal(typeof args[0].render, 'function');
+      assert.equal(args[0].constructor.name, 'SafeUrl');
+      assert.deepEqual(args[1], { uid: 'fakeUid' });
+      assert.deepEqual(result, []);
+    });
+  });
+
+  it('db.device succeeds without a redis instance', () => {
+    results.pool = { id: 'fakeDeviceId' };
+    return db.device('fakeUid', 'fakeDeviceId').then(result => {
+      assert.equal(pool.get.callCount, 1);
+      const args = pool.get.args[0];
+      assert.equal(args.length, 2);
+      assert.equal(typeof args[0].render, 'function');
+      assert.equal(args[0].constructor.name, 'SafeUrl');
+      assert.deepEqual(args[1], { uid: 'fakeUid', deviceId: 'fakeDeviceId' });
+      assert.equal(result.id, 'fakeDeviceId');
+    });
+  });
+
+  it('db.deleteAccount succeeds without a redis instance', () => {
+    return db.deleteAccount({ uid: 'fakeUid' }).then(() => {
+      assert.equal(pool.del.callCount, 1);
+      const args = pool.del.args[0];
+      assert.equal(args.length, 2);
+      assert.equal(typeof args[0].render, 'function');
+      assert.equal(args[0].constructor.name, 'SafeUrl');
+      assert.deepEqual(args[1], { uid: 'fakeUid' });
+    });
+  });
+
+  it('db.deleteSessionToken succeeds without a redis instance', () => {
+    return db.deleteSessionToken({ id: 'foo', uid: 'bar' }).then(() => {
+      assert.equal(pool.del.callCount, 1);
+      const args = pool.del.args[0];
+      assert.equal(args.length, 2);
+      assert.equal(typeof args[0].render, 'function');
+      assert.equal(args[0].constructor.name, 'SafeUrl');
+      assert.deepEqual(args[1], { id: 'foo' });
+    });
+  });
+
+  it('db.deleteDevice succeeds without a redis instance', () => {
+    pool.del = sinon.spy(() => P.resolve({}));
+    return db.deleteDevice('foo', 'bar').then(() => {
+      assert.equal(pool.del.callCount, 1);
+      const args = pool.del.args[0];
+      assert.equal(args.length, 2);
+      assert.equal(typeof args[0].render, 'function');
+      assert.equal(args[0].constructor.name, 'SafeUrl');
+      assert.deepEqual(args[1], { uid: 'foo', deviceId: 'bar' });
+    });
+  });
+
+  it('db.resetAccount succeeds without a redis instance', () => {
+    const start = Date.now();
+    return db.resetAccount({ uid: 'fakeUid' }, {}).then(() => {
+      const end = Date.now();
+      assert.equal(pool.post.callCount, 1);
+      const args = pool.post.args[0];
+      assert.equal(args.length, 3);
+      assert.equal(typeof args[0].render, 'function');
+      assert.equal(args[0].constructor.name, 'SafeUrl');
+      assert.deepEqual(args[1], { uid: 'fakeUid' });
+      assert.equal(Object.keys(args[2]).length, 1);
+      assert.ok(args[2].verifierSetAt >= start);
+      assert.ok(args[2].verifierSetAt <= end);
+    });
+  });
+
+  it('db.touchSessionToken succeeds without a redis instance', () => {
+    return db.touchSessionToken({ id: 'foo', uid: 'bar' }).then(() => {
+      assert.equal(pool.get.callCount, 0);
+      assert.equal(pool.post.callCount, 0);
+    });
+  });
+
+  it('db.pruneSessionTokens succeeds without a redis instance', () => {
+    return db
+      .pruneSessionTokens('foo', [{ id: 'bar', createdAt: 1 }])
+      .then(() => {
+        assert.equal(pool.get.callCount, 0);
+        assert.equal(pool.post.callCount, 0);
+      });
+  });
+
+  it('db.createSessionToken succeeds without a redis instance', () => {
+    return db.createSessionToken({ uid: 'foo' }).then(() => {
+      assert.equal(pool.put.callCount, 1);
+      const args = pool.put.args[0];
+      assert.equal(args.length, 3);
+      assert.equal(typeof args[0].render, 'function');
+      assert.equal(args[0].constructor.name, 'SafeUrl');
+      assert.ok(args[1].id);
+      assert.equal(args[2].tokenId, args[1].id);
+      assert.equal(args[2].uid, 'foo');
+    });
+  });
+});
+
 describe('redis enabled, token-pruning enabled:', () => {
   const tokenLifetimes = {
     sessionTokenWithoutDevice: 2419200000,
@@ -399,7 +544,7 @@ describe('redis enabled, token-pruning disabled:', () => {
     sessionTokenWithoutDevice: 2419200000,
   };
 
-  let pool, redis, log, tokens;
+  let pool, redis, log, tokens, db;
 
   beforeEach(() => {
     pool = {
@@ -411,7 +556,7 @@ describe('redis enabled, token-pruning disabled:', () => {
       get: sinon.spy(() => P.resolve('{}')),
       set: sinon.spy(() => P.resolve()),
       del: sinon.spy(() => P.resolve()),
-      update: sinon.spy(() => P.resolve()),
+      pruneSessionTokens: sinon.spy(() => P.resolve()),
     };
     log = mocks.mockLog();
     tokens = require(`${LIB_DIR}/tokens`)(log, { tokenLifetimes });
@@ -467,6 +612,12 @@ describe('redis enabled, token-pruning disabled:', () => {
       tokens,
       {}
     );
-    return DB.connect({});
+    return DB.connect({}).then(result => (db = result));
+  });
+
+  it('should not call redis.pruneSessionTokens in db.pruneSessionTokens', () => {
+    return db
+      .pruneSessionTokens('wibble', [{ id: 'blee', createdAt: 1 }])
+      .then(() => assert.equal(redis.pruneSessionTokens.callCount, 0));
   });
 });

@@ -20,11 +20,20 @@ function readScript(name) {
   });
 }
 
+function resolveInMs(ms, value) {
+  return new Promise(resolve => setTimeout(() => resolve(value), ms));
+}
+
+function rejectInMs(ms, err = new Error('redis timeout')) {
+  return new Promise((_, reject) => setTimeout(() => reject(err), ms));
+}
+
 class FxaRedis {
   constructor(config, log) {
     config.keyPrefix = config.prefix;
     this.log = log;
     this.redis = new Redis(config);
+    this.timeoutMs = config.timeoutMs || 1000;
     scriptNames.forEach(name => this.defineCommand(name));
   }
 
@@ -37,16 +46,25 @@ class FxaRedis {
   }
 
   touchSessionToken(uid, token) {
-    return this.redis.touchSessionToken(uid, JSON.stringify(token));
+    return Promise.race([
+      this.redis.touchSessionToken(uid, JSON.stringify(token)),
+      resolveInMs(this.timeoutMs),
+    ]);
   }
 
   pruneSessionTokens(uid, tokenIds = []) {
-    return this.redis.pruneSessionTokens(uid, JSON.stringify(tokenIds));
+    return Promise.race([
+      this.redis.pruneSessionTokens(uid, JSON.stringify(tokenIds)),
+      rejectInMs(this.timeoutMs),
+    ]);
   }
 
   async getSessionTokens(uid) {
     try {
-      const value = await this.redis.getSessionTokens(uid);
+      const value = await Promise.race([
+        this.redis.getSessionTokens(uid),
+        rejectInMs(this.timeoutMs),
+      ]);
       return JSON.parse(value);
     } catch (e) {
       this.log.error('redis', e);

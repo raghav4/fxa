@@ -12,6 +12,11 @@ const redis = require('../../lib/redis')(
   { error: sinon.spy() }
 );
 
+const downRedis = require('../../lib/redis')(
+  { enabled: true, port: 1, timeoutMs: 10 },
+  { error: sinon.spy() }
+);
+
 const uid = 'uid1';
 const sessionToken = {
   lastAccessTime: 1573067619720,
@@ -82,6 +87,41 @@ describe('Redis', () => {
       delete s.id;
       assert.deepEqual(tokens[sessionToken.id], s);
     });
+
+    it('returns empty for malformed entries', async () => {
+      await redis.set(uid, 'YOLO!');
+      const tokens = await redis.getSessionTokens(uid);
+      assert.isEmpty(tokens);
+    });
+
+    it('deletes malformed entries', async () => {
+      await redis.set(uid, 'YOLO!');
+      await redis.getSessionTokens(uid);
+      const nothing = await redis.get(uid);
+      assert.isNull(nothing);
+    });
+
+    it('handles old (json) format entries', async () => {
+      const oldFormat = {
+        lastAccessTime: 42,
+        uaBrowser: 'Firefox',
+        uaBrowserVersion: '59',
+        uaOS: 'Mac OS X',
+        uaOSVersion: '10.11',
+        uaDeviceType: null,
+        uaFormFactor: null,
+        location: {
+          city: 'Bournemouth',
+          state: 'England',
+          stateCode: 'EN',
+          country: 'United Kingdom',
+          countryCode: 'GB',
+        },
+      };
+      await redis.set(uid, JSON.stringify({ [uid]: oldFormat }));
+      const tokens = await redis.getSessionTokens(uid);
+      assert.deepEqual(tokens[uid], oldFormat);
+    });
   });
 
   describe('pruneSessionTokens', () => {
@@ -111,6 +151,34 @@ describe('Redis', () => {
       await redis.pruneSessionTokens(uid, [sessionToken.id, 'token2']);
       const rawData = await redis.get(uid);
       assert.isNull(rawData);
+    });
+  });
+});
+
+describe('Redis down', () => {
+  describe('touchSessionToken', () => {
+    it('returns without error', async () => {
+      await downRedis.touchSessionToken(uid, {});
+    });
+  });
+
+  describe('getSessionTokens', () => {
+    it('returns an empty object without error', async () => {
+      const tokens = await downRedis.getSessionTokens(uid);
+      assert.isEmpty(tokens);
+    });
+  });
+
+  describe('pruneSessionTokens', () => {
+    it('throws a timeout error', async () => {
+      try {
+        await downRedis.pruneSessionTokens(uid);
+      } catch (e) {
+        assert.typeOf(e, 'Error');
+        assert.equal(e.message, 'redis timeout');
+        return;
+      }
+      assert.fail();
     });
   });
 });
